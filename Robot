@@ -1,0 +1,512 @@
+#include <AccelStepper.h>
+#include <ezButton.h>
+#include <Servo.h>
+
+ezButton limitSwitchX(9);
+ezButton limitSwitchY(10);
+ezButton limitSwitchZ(11);
+ezButton limitSwitchA(A3);
+
+#define MOTOR_X_ENABLE_PIN 8
+#define MOTOR_X_STEP_PIN 2
+#define MOTOR_X_DIR_PIN 5
+
+
+#define MOTOR_Y_ENABLE_PIN 8
+#define MOTOR_Y_STEP_PIN 3
+#define MOTOR_Y_DIR_PIN 6
+
+
+#define MOTOR_Z_ENABLE_PIN 8
+#define MOTOR_Z_STEP_PIN 4
+#define MOTOR_Z_DIR_PIN 7
+
+#define MOTOR_A_ENABLE_PIN 8
+#define MOTOR_A_STEP_PIN 12
+#define MOTOR_A_DIR_PIN 13
+
+AccelStepper motorX(1, MOTOR_X_STEP_PIN, MOTOR_X_DIR_PIN);
+AccelStepper motorY(1, MOTOR_Y_STEP_PIN, MOTOR_Y_DIR_PIN);
+AccelStepper motorZ(1, MOTOR_Z_STEP_PIN, MOTOR_Z_DIR_PIN);
+AccelStepper motorA(1, MOTOR_A_STEP_PIN, MOTOR_A_DIR_PIN);
+
+Servo gripperServo;
+
+const float theta1AngleToSteps = 11.111111;
+const float theta2AngleToSteps = 8.888888;
+const float phiAngleToSteps = 2.5;
+const float zDistanceToSteps = 25;
+
+double data[6];
+// birincisi lokasyon
+// ikincisi  motor id
+double getData[2];
+
+void setup()
+{
+   pinMode(MOTOR_X_ENABLE_PIN, OUTPUT);
+   pinMode(MOTOR_Y_ENABLE_PIN, OUTPUT);
+   pinMode(MOTOR_Z_ENABLE_PIN, OUTPUT);
+   pinMode(MOTOR_A_ENABLE_PIN, OUTPUT);
+
+   motorX.setEnablePin(MOTOR_X_ENABLE_PIN);
+   motorX.setAcceleration(25);
+   motorX.setMaxSpeed(100);
+   motorX.setSpeed(50);
+   motorX.enableOutputs();
+
+   motorY.setEnablePin(MOTOR_Y_ENABLE_PIN);
+   motorY.setAcceleration(25);
+   motorY.setMaxSpeed(100);
+   motorY.setSpeed(50);
+   motorY.enableOutputs();
+
+   motorZ.setEnablePin(MOTOR_Z_ENABLE_PIN);
+   motorZ.setAcceleration(25);
+   motorZ.setMaxSpeed(100);
+   motorZ.setSpeed(50);
+   motorZ.enableOutputs();
+
+   motorA.setEnablePin(MOTOR_Z_ENABLE_PIN);
+   motorA.setAcceleration(25);
+   motorA.setMaxSpeed(100);
+   motorA.setSpeed(50);
+   motorA.enableOutputs();
+   
+  Serial.begin(9600);
+  
+  limitSwitchX.setDebounceTime(50); // set debounce time to 50 milliseconds
+  limitSwitchY.setDebounceTime(50); 
+  limitSwitchZ.setDebounceTime(50); 
+  limitSwitchA.setDebounceTime(50); 
+
+  gripperServo.attach(A0);
+}
+
+void loop()
+{  
+  
+  if(Serial.available()) 
+  {
+    String command = Serial.readStringUntil('\n');
+    command.replace("⸮",""); 
+    if(command == "home")
+    {
+     Serial.println("Varsayilan Lokasyona Gidiliyor.");
+     home();
+     clearData();
+    }
+    else if (command == "run"){
+
+      AccelStepper empytMotor;
+      
+      double runLocatin;
+      double motorId;
+      
+      String getCommand;
+
+      set_Value(getCommand);
+      getLocationInScreen_SingleLocation(getCommand,runLocatin,motorId);
+
+      if (motorId == 1)
+      {
+        runMotorWithMoveToCommand(motorX,empytMotor,runLocatin,0,0);
+      }
+      else if (motorId == 2)
+      {
+        runMotorWithMoveToCommand(motorY,empytMotor,runLocatin,0,0);
+      }
+      else if (motorId == 3)
+      {
+        runMotorWithMoveToCommand(motorZ,empytMotor,runLocatin,0,0);
+      }
+      else if (motorId == 4)
+      {
+        runMotorWithMoveToCommand(motorA,empytMotor,runLocatin,0,0);
+      }
+ 
+    }
+    else if (command == "start"){
+
+      double pickLocationX;
+      double pickLocationY;
+      double placeLocationX;
+      double placeLocationY;
+
+      double zPickLocation;
+      double zPlaceLocation;
+      
+      String allLocation;
+
+      set_Value(allLocation);
+      getLocationInScreen(allLocation,pickLocationX,pickLocationY,placeLocationX,placeLocationY,zPickLocation,zPlaceLocation);
+      
+      int theta1;
+      int theta2;
+      int phi;
+
+      while(true){
+        if(!(locationValueControl(pickLocationX,pickLocationY))){
+          Serial.println("Hatali Toplama Konumu girdiniz tekrar giriniz");
+          tryAgainSetValue(allLocation,pickLocationX,pickLocationY,placeLocationX,placeLocationY,zPickLocation,zPlaceLocation);
+          continue;
+        }
+        if(!(locationValueControl(placeLocationX,placeLocationY))){
+          Serial.println("Hatali Hedef Konumu girdiniz tekrar giriniz");
+          tryAgainSetValue(allLocation,pickLocationX,pickLocationY,placeLocationX,placeLocationY,zPickLocation,zPlaceLocation);
+          continue;
+        }
+        if( (pickLocationX < 165 && pickLocationY < 165 && pickLocationX > -165 && pickLocationY > -250) || 
+            (placeLocationX < 165 && placeLocationY < 165 && placeLocationX > -165 && placeLocationY > -250 )){
+          Serial.println("Geçerli Bir alan giriniz");
+          tryAgainSetValue(allLocation,pickLocationX,pickLocationY,placeLocationX,placeLocationY,zPickLocation,zPlaceLocation);
+          continue;
+        }
+        if(zPickLocation < -2600 || zPlaceLocation > 0 ){
+          Serial.println("Geçerli Bir Yükseklik Giriniz");
+          tryAgainSetValue(allLocation,pickLocationX,pickLocationY,placeLocationX,placeLocationY,zPickLocation,zPlaceLocation);
+        }
+        break;
+      }
+
+      
+
+      while(!(command == "stop")){
+        inverseKinematics(pickLocationX,pickLocationY,theta1,theta2,phi); // pick coordinate
+        pickAndPlaceFlow(theta1* theta1AngleToSteps ,theta2 * theta2AngleToSteps, phi*phiAngleToSteps ,15,zPickLocation);
+
+        inverseKinematics(placeLocationX,placeLocationY,theta1,theta2,phi); // place coordinate
+        pickAndPlaceFlow(theta1* theta1AngleToSteps ,theta2 * theta2AngleToSteps, phi*phiAngleToSteps ,70,zPlaceLocation);
+
+        
+
+        command = Serial.readStringUntil('\n');
+        if(command == "stop")
+        {
+          Serial.println("Islem Durduruldu.");
+        }
+
+      }
+    }
+  }
+}
+
+// Konumların kullanılabilirlik durumunun kontrolü yapılıyor
+bool locationValueControl(double locationX,double locationY){
+  int theta1;
+  int theta2;
+  int phi;
+
+  inverseKinematics(locationX,locationY,theta1,theta2,phi);
+  if (theta1 == NAN || theta2 == NAN || phi == NAN || (theta1 == 0 && theta2 == 0 && ((locationX != 364.5 && locationY != 0) && (locationX != 0 && locationY != -364.5)) ))
+  {
+    return false;
+  }
+  return true;
+}
+
+void getLocationInScreen(String content,double & pickLocationX, double & pickLocationY, double & placeLocationX, double & placeLocationY, double & zPickLocation, double & zPlaceLocation){
+  for (int i = 0; i < 6; i++) {
+      int index = content.indexOf(","); // locate the first ","
+      data[i] = atof(content.substring(0, index).c_str()); //Extract the number from start to the ","
+      content = content.substring(index + 1); //Remove the number from the string
+    }
+  for (int i = 0; i < 6; i++){
+    
+    if (i == 0)
+    {
+      pickLocationX = data[i];
+    }
+    else if (i == 1)
+    {
+      pickLocationY = data[i];
+    }
+    else if (i == 2)
+    {
+      placeLocationX = data[i];
+    }
+    else if (i == 3)
+    {
+      placeLocationY = data[i];
+    }
+    else if (i == 4)
+    {
+      zPickLocation = data[i];
+    }
+    else if (i == 5)
+    {
+      zPlaceLocation = data[i];
+    }
+  }
+  return;
+}
+
+void getLocationInScreen_SingleLocation(String content,double & location, double & motorId){
+  for (int i = 0; i < 2; i++) {
+      int index = content.indexOf(","); // locate the first ","
+      getData[i] = atof(content.substring(0, index).c_str()); //Extract the number from start to the ","
+      content = content.substring(index + 1); //Remove the number from the string
+    }
+  for (int i = 0; i < 2; i++){
+    
+    if (i == 0)
+    {
+      location = getData[i];
+    }
+    else if (i == 1)
+    {
+      motorId = getData[i];
+    }
+  }
+  return;
+}
+
+// Kullanıcıdan alınacak değerleri ilgili değişkene pointer yardımıyla atayan fonksiyon
+void tryAgainSetValue(String & locationCommand,double & pickLocationX, double & pickLocationY, double & placeLocationX, double & placeLocationY, double & zPickLocation, double & zPlaceLocation){
+  set_Value(locationCommand);
+  getLocationInScreen(locationCommand,pickLocationX,pickLocationY,placeLocationX,placeLocationY,zPickLocation,zPlaceLocation);
+  return;
+}
+
+// Kullanıcıdan alınan değeri ilgili değişkene atayan fonksiyon
+void set_Value(String & value){
+  while(true){
+    if(Serial.available())
+    {
+      value = Serial.readStringUntil('\n');
+      break;
+    }
+  }
+  return;
+}
+
+void home(){
+
+    while(true){
+
+      limitSwitchZ.loop();
+      limitSwitchA.loop();
+
+      int stateZ = limitSwitchZ.getState();
+      int stateA = limitSwitchA.getState();
+
+      goAndSetSwitchLocation(motorZ, 415.5, limitSwitchZ,500);
+      goAndSetSwitchLocation(motorA, -425, limitSwitchA,-100);
+
+      if(stateZ==HIGH && stateA == HIGH)
+      {
+          goHomeLocation(motorZ, motorA,limitSwitchZ,limitSwitchA,0,250);
+          break;
+      }
+    } // While End
+
+    while(true){
+
+      limitSwitchX.loop(); 
+      limitSwitchY.loop();
+      int stateX = limitSwitchX.getState();
+      int stateY = limitSwitchY.getState();
+      
+      goAndSetSwitchLocation(motorX, -988.75, limitSwitchX,-100);
+      goAndSetSwitchLocation(motorY, -1355, limitSwitchY,-100);
+      
+      if(stateX==HIGH && stateY == HIGH)
+      {
+          goHomeLocation(motorX, motorY,limitSwitchX,limitSwitchY,0,0);
+          break;
+      } 
+    }//While End
+} // Home end
+
+// Home lokasyonuna giderken switch temas ettiği en lokasyonunu güncelleyen fonksiyon
+void goAndSetSwitchLocation(AccelStepper & motor, double setMotorLocation, ezButton nameSwitch, int moveDirection){
+  
+  nameSwitch.loop();
+  int state = nameSwitch.getState();
+
+  if(state == LOW)
+  {
+    motor.move(moveDirection);
+    motor.run();
+  }
+  else
+  {
+    motor.setCurrentPosition(setMotorLocation);
+    motor.stop();
+  }
+  return;
+}
+
+// Switch temas eden motorları home lokasyonuna götüren fonksiyon
+void goHomeLocation(AccelStepper & motor1, AccelStepper & motor2, ezButton switch1, ezButton switch2,int motor1HomeLocation,int motor2HomeLocation){
+    
+    switch1.loop();
+    switch2.loop();
+
+    motor1.moveTo(motor1HomeLocation);
+    motor2.moveTo(motor2HomeLocation);
+
+    while(true){
+      if(motor1.currentPosition() != motor1HomeLocation){
+          motor1.run();
+      }
+      else{
+        motor1.stop();
+      }
+      if(motor2.currentPosition() != motor2HomeLocation){
+        motor2.run();
+      }
+      else{
+        motor2.stop();
+      }
+      if(motor1.currentPosition() == motor1HomeLocation && motor2.currentPosition() == motor2HomeLocation ){
+        break;
+      }
+    } 
+    return;
+}
+
+// Arka Arkaya home komutlarında hata almamak için motorları sıfırlayan fonksiyon
+void clearData(){
+    limitSwitchZ.loop();
+    motorZ.move(0);
+    motorZ.run();
+
+    limitSwitchA.loop();
+    motorA.move(0);
+    motorA.run();
+
+    limitSwitchX.loop();
+    motorX.move(0);
+    motorX.run();
+
+    limitSwitchY.loop();
+    motorY.move(0);
+    motorY.run();
+    return ;
+}
+
+// Toplama ve yerleştirme işlemlerinin yapıldığı fonksiyon
+void pickAndPlaceFlow(double xLocation, double yLocation, double pi, int servoAngle, int zLowLocation){
+
+    AccelStepper empytMotor;
+    int emptyMotorLocation = 0;
+    
+    int zMotorYukseklik = -1000;
+    int zMotorAlcaklik = zLowLocation;
+  
+    run_XY_Motor(xLocation,yLocation);
+    runMotorWithMoveToCommand(motorA,empytMotor,pi,emptyMotorLocation,0);
+    runMotorWithMoveToCommand(motorZ,empytMotor,zMotorAlcaklik,emptyMotorLocation,0);
+    delay(2000);
+    run_servo(servoAngle);
+    runMotorWithMoveToCommand(motorZ,empytMotor,zMotorYukseklik,emptyMotorLocation,0);
+  
+  return ;
+}
+
+// X ve Y motorlarını aynı anda ilgili lokasyona götüren fonksiyon
+void run_XY_Motor(double xLocation, double yLocation ){
+  runMotorWithMoveToCommand(motorX,motorY,xLocation,yLocation,1);
+  return;
+}
+
+// Motorları ilgili lokasyona götüren fonksiyon
+void runMotorWithMoveToCommand(AccelStepper & motor1,AccelStepper & motor2,int location1,int location2,int is2Motor){
+
+  if (is2Motor != 0)
+  {
+    motor1.moveTo(location1);
+    motor2.moveTo(location2);
+    while(true){
+        if(motor1.currentPosition() != location1){
+          motor1.run();
+        }
+        else{
+          motor1.stop();
+        }
+        if(motor2.currentPosition() != location2){
+          motor2.run();
+        }
+        else{
+          motor2.stop();
+        }
+        if(motor1.currentPosition() == location1 && motor2.currentPosition() == location2 ){
+          break;
+        }
+    } // While End
+  }
+  else{
+    motor1.moveTo(location1);
+    while(motor1.currentPosition() != location1){
+          motor1.run();
+    } // While End
+  }
+  return;
+}
+
+// Servo motoru çalıştıran fonksiyon
+void run_servo(int angle){
+  gripperServo.write(angle);
+  delay(1000);
+  return;
+}
+
+// Ters kinematik hesaplamalarının yapıldığı fonksiyon
+void inverseKinematics(float x, float y, int & t1, int & t2, int & pi) {
+  
+  double L1 = 228; 
+  double L2 = 136.5; 
+  double theta1, theta2, phi, z;
+  
+  theta2 = acos((sq(x) + sq(y) - sq(L1) - sq(L2)) / (2 * L1 * L2));
+  if (x < 0 & y < 0) {
+    theta2 = (-1) * theta2;
+  }
+  
+  theta1 = atan(x / y) - atan((L2 * sin(theta2)) / (L1 + L2 * cos(theta2)));
+  
+  theta2 = (-1) * theta2 * 180 / PI;
+  theta1 = theta1 * 180 / PI;
+
+  if (x >= 0 & y >= 0) {       
+    theta1 = 90 - theta1;
+  }
+  if (x < 0 & y > 0) {       
+    theta1 = 90 - theta1;
+  }
+  if (x < 0 & y < 0) {       
+    theta1 = 270 - theta1;
+    phi = 270 - theta1 - theta2;
+    phi = (-1) * phi;
+  }
+  if (x > 0 & y < 0) {       
+    theta1 = -90 - theta1;
+  }
+  if (x < 0 & y == 0) {
+    theta1 = 270 + theta1;
+  }
+  
+  phi = 90 + theta1 + theta2;
+  phi = (-1) * phi;
+
+  if (x < 0 & y < 0) {       
+    phi = 270 - theta1 - theta2;
+  }
+  if (abs(phi) > 165) {
+    phi = 180 + phi;
+  }
+
+  theta1=round(theta1);
+  theta2=round(theta2);
+  phi=round(phi);
+
+  double data[3];
+
+  t1 = theta1;
+  t2 = theta2;
+  pi = phi;
+
+  return;
+  
+}
